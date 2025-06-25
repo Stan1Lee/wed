@@ -52,7 +52,11 @@ def init_db():
         conn.commit()
         cursor.close()
         conn.close()
-
+        
+init_db()  # Initialize the database on startup
+if __name__ == '__main__':
+    
+    app.run(debug=True)
 
 @app.route('/')
 def home():
@@ -191,6 +195,4 @@ def admin_login():
     return jsonify({'error': 'Invalid password'}), 401
 
 
-if __name__ == '__main__':
-    init_db()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+
