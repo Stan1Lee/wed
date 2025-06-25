@@ -7,7 +7,8 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import qrcode
 import yagmail
-import mysql.connector
+import psycopg2
+import psycopg2.extras
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env variables
@@ -15,12 +16,12 @@ load_dotenv()  # Load .env variables
 app = Flask(__name__)
 CORS(app)
 
-# MySQL config
+# PostgreSQL config
 DB_CONFIG = {
-    'host': os.getenv('MYSQL_HOST', 'localhost'),
-    'user': os.getenv('MYSQL_USER', 'root'),
-    'password': os.getenv('MYSQL_PASSWORD', ''),
-    'database': os.getenv('MYSQL_DB', 'wedding_db')
+    'host': os.getenv('POSTGRES_HOST', 'localhost'),
+    'user': os.getenv('POSTGRES_USER', 'postgres'),
+    'password': os.getenv('POSTGRES_PASSWORD', ''),
+    'dbname': os.getenv('POSTGRES_DB', 'wedding_db')
 }
 
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'supersecret')
@@ -28,8 +29,8 @@ ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'supersecret')
 
 def get_db_connection():
     try:
-        return mysql.connector.connect(**DB_CONFIG)
-    except mysql.connector.Error as err:
+        return psycopg2.connect(**DB_CONFIG)
+    except psycopg2.Error as err:
         print(f"DB Error: {err}")
         return None
 
@@ -42,10 +43,10 @@ def init_db():
             CREATE TABLE IF NOT EXISTS guests (
                 id VARCHAR(255) PRIMARY KEY,
                 name VARCHAR(255) NOT NULL,
-                email VARCHAR(255) NOT NULL UNIQUE,  # Added UNIQUE constraint
+                email VARCHAR(255) NOT NULL UNIQUE,
                 qr_code_data VARCHAR(255),
                 checked_in BOOLEAN DEFAULT FALSE,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
         conn.commit()
@@ -55,7 +56,7 @@ def init_db():
 
 @app.route('/')
 def home():
-    return 'Flask backend is running!'
+    return 'Flask backend is running with PostgreSQL!'
 
 
 def generate_qr_code_image(data):
@@ -96,11 +97,11 @@ def register():
                 VALUES (%s, %s, %s, %s, %s)
             """, (guest_id, name, email, guest_id, False))
             conn.commit()
-        except mysql.connector.IntegrityError as e:
-            # This handles the case where another registration with the same email snuck in
-            if "Duplicate entry" in str(e) and "email" in str(e):
+        except psycopg2.IntegrityError as e:
+            conn.rollback()
+            if "duplicate key" in str(e).lower() and "email" in str(e).lower():
                 return jsonify({'error': 'This email is already registered'}), 400
-            raise  # Re-raise other integrity errors
+            raise
 
         # Generate QR code
         print("Generating QR code for:", guest_id)
@@ -120,7 +121,7 @@ def register():
                 to=email,
                 subject="Your wedding registration QR code",
                 contents=[
-                    f"Dear {name}, \n\nThank you for registering for the wedding. Please find your QR code attached. Show this at the entrance to check In.\n\nBest regards,\nWedding Team",
+                    f"Dear {name},\n\nThank you for registering for the wedding. Please find your QR code attached. Show this at the entrance to check in.\n\nBest regards,\nWedding Team"
                 ],
                 attachments=[qr_filename]
             )
@@ -132,7 +133,6 @@ def register():
             conn.commit()
             return jsonify({'error': 'Failed to send email with QR code'}), 500
         finally:
-            # Clean up the temporary file
             if os.path.exists(qr_filename):
                 os.remove(qr_filename)
 
@@ -175,7 +175,7 @@ def checkin():
 @app.route('/guests', methods=['GET'])
 def guests():
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cursor.execute("SELECT * FROM guests")
     guests = cursor.fetchall()
     cursor.close()
@@ -192,5 +192,5 @@ def admin_login():
 
 
 if __name__ == '__main__':
-    init_db() # Ensure the database is initialized before starting the app
+    init_db()
     app.run(debug=True, host='0.0.0.0', port=5000)
